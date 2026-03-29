@@ -78,8 +78,6 @@ python src/main.py
 - runtime_seconds
 - evaluated_traces
 - trace_sampling_used
-- evaluated_variants
-- variant_sampling_used
 - num_places
 - num_transitions
 - num_arcs
@@ -97,7 +95,7 @@ The report contains:
 - Deterministic naming is used for all generated files.
 - Discovery/evaluation failures are captured per metric to avoid stopping the full benchmark.
 - PM4Py API differences across versions are handled with defensive fallbacks in discovery.
-- Large logs are automatically sampled during evaluation by both traces and variants (`EVALUATION_MAX_TRACES`, `EVALUATION_MAX_VARIANTS` in `src/config.py`), reducing the chance that precision/alignments appear "stuck" for many hours.
+- Large logs are automatically sampled to a maximum number of traces during evaluation (`EVALUATION_MAX_TRACES` in `src/config.py`), reducing the chance that precision/alignments appear "stuck" for many hours.
 
 ## Mapping Outputs to Dissertation Chapter 4
 

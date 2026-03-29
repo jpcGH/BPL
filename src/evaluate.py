@@ -40,10 +40,7 @@ class EvaluationDiagnostics:
 
     original_trace_count: Optional[int] = None
     evaluated_trace_count: Optional[int] = None
-    original_variant_count: Optional[int] = None
-    evaluated_variant_count: Optional[int] = None
     sampled: bool = False
-    variant_sampled: bool = False
     metric_runtimes: Optional[list[MetricRuntime]] = None
 
 
@@ -84,42 +81,6 @@ def _sample_log(log: object, max_traces: Optional[int], seed: int = 42) -> tuple
         return sampled_traces, original_count, len(sampled_traces), True
 
 
-def _variant_key(trace: object) -> tuple[str, ...]:
-    return tuple(event.get("concept:name", "<missing>") for event in trace)
-
-
-def _count_variants(log: object) -> Optional[int]:
-    try:
-        return len({_variant_key(trace) for trace in log})
-    except Exception:
-        return None
-
-
-def _sample_variants(log: object, max_variants: Optional[int]) -> tuple[object, Optional[int], Optional[int], bool]:
-    original_variant_count = _count_variants(log)
-    if max_variants is None or original_variant_count is None or original_variant_count <= max_variants:
-        return log, original_variant_count, original_variant_count, False
-
-    chosen_keys = set()
-    sampled_traces = []
-    for trace in log:
-        key = _variant_key(trace)
-        if key in chosen_keys:
-            continue
-        chosen_keys.add(key)
-        sampled_traces.append(trace)
-        if len(chosen_keys) >= max_variants:
-            break
-
-    try:
-        from pm4py.objects.log.obj import EventLog
-
-        sampled_log = EventLog(sampled_traces, attributes=getattr(log, "attributes", None))
-        return sampled_log, original_variant_count, _count_variants(sampled_log), True
-    except Exception:
-        return sampled_traces, original_variant_count, _count_variants(sampled_traces), True
-
-
 def _timed_metric(metric_name: str, fn) -> tuple[MetricValue, MetricRuntime]:
     start = time.perf_counter()
     metric = _safe_metric(metric_name, fn)
@@ -133,7 +94,6 @@ def evaluate_model(
     initial_marking: object,
     final_marking: object,
     max_traces: Optional[int] = None,
-    max_variants: Optional[int] = None,
 ) -> tuple[EvaluationResult, EvaluationDiagnostics]:
     """Evaluate discovered model with PM4Py conformance and quality metrics."""
     from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
@@ -142,9 +102,6 @@ def evaluate_model(
     from pm4py.algo.evaluation.simplicity import algorithm as simplicity_evaluator
 
     eval_log, original_count, eval_count, sampled = _sample_log(log, max_traces=max_traces)
-    eval_log, original_variant_count, eval_variant_count, variant_sampled = _sample_variants(
-        eval_log, max_variants=max_variants
-    )
 
     fitness, fitness_runtime = _timed_metric(
         "fitness",
@@ -173,10 +130,7 @@ def evaluate_model(
         EvaluationDiagnostics(
             original_trace_count=original_count,
             evaluated_trace_count=eval_count,
-            original_variant_count=original_variant_count,
-            evaluated_variant_count=eval_variant_count,
             sampled=sampled,
-            variant_sampled=variant_sampled,
             metric_runtimes=[
                 fitness_runtime,
                 precision_runtime,
