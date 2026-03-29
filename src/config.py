@@ -23,6 +23,7 @@ PREFERRED_TIMESTAMP_KEYS = [
 ]
 
 ALGORITHMS = ["alpha", "heuristics", "inductive"]
+EVALUATION_MAX_TRACES = 5000
 
 PM4PY_DEFAULT_VARIANT_NOTE = (
     "PM4Py API variants differ across versions. The pipeline attempts a stable import-first "
