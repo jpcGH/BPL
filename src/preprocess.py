@@ -34,6 +34,25 @@ def _find_timestamp_key(event: Dict[str, object], candidate_keys: List[str]) -> 
     return None
 
 
+def _empty_log_like(log: object) -> object:
+    """Return an empty log instance while preserving the log's concrete type when possible."""
+    cleaned_log = deepcopy(log)
+
+    clear_method = getattr(cleaned_log, "clear", None)
+    if callable(clear_method):
+        clear_method()
+        return cleaned_log
+
+    if hasattr(cleaned_log, "_list"):
+        cleaned_log._list = []  # type: ignore[attr-defined]
+        return cleaned_log
+
+    try:
+        return type(log)()
+    except Exception:
+        return []
+
+
 def preprocess_log(
     log: object,
     dataset_name: str,
@@ -45,11 +64,7 @@ def preprocess_log(
     and skip malformed traces.
     """
     warnings: List[str] = []
-    cleaned_log = deepcopy(log)
-    if hasattr(cleaned_log, "clear"):
-        cleaned_log.clear()
-    else:
-        del cleaned_log[:]
+    cleaned_log = _empty_log_like(log)
 
     for trace_index, trace in enumerate(log):
         if not trace:
