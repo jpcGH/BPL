@@ -46,7 +46,10 @@ def preprocess_log(
     """
     warnings: List[str] = []
     cleaned_log = deepcopy(log)
-    cleaned_log.clear()
+    if hasattr(cleaned_log, "clear"):
+        cleaned_log.clear()
+    else:
+        del cleaned_log[:]
 
     for trace_index, trace in enumerate(log):
         if not trace:
