@@ -16,6 +16,8 @@ from config import (
     ALGORITHMS,
     CHARTS_DIR,
     DATA_DIR,
+    EVALUATION_MAX_TRACES,
+    EVALUATION_MAX_VARIANTS,
     NETS_DIR,
     PM4PY_DEFAULT_VARIANT_NOTE,
     PREFERRED_TIMESTAMP_KEYS,
@@ -49,6 +51,8 @@ def run_pipeline(data_dir: Path = DATA_DIR) -> pd.DataFrame:
         f"Run timestamp (UTC): {now_iso()}",
         f"Input directory: {data_dir}",
         f"Algorithms: {', '.join(ALGORITHMS)}",
+        f"Evaluation max traces per dataset/algorithm: {EVALUATION_MAX_TRACES}",
+        f"Evaluation max variants per dataset/algorithm: {EVALUATION_MAX_VARIANTS}",
         f"PM4Py note: {PM4PY_DEFAULT_VARIANT_NOTE}",
         "",
         "## Dataset Summary",
@@ -84,12 +88,35 @@ def run_pipeline(data_dir: Path = DATA_DIR) -> pd.DataFrame:
 
         for algorithm, discovered in discovery_outputs.items():
             logger.info("Evaluating %s on %s", algorithm, dataset.name)
-            evaluation = evaluate_model(
+            evaluation, diagnostics = evaluate_model(
                 preprocessed.cleaned_log,
                 discovered.net,
                 discovered.initial_marking,
                 discovered.final_marking,
+                max_traces=EVALUATION_MAX_TRACES,
+                max_variants=EVALUATION_MAX_VARIANTS,
             )
+            if diagnostics.sampled:
+                logger.warning(
+                    "Evaluation for %s/%s was sampled from %s to %s traces to control runtime.",
+                    dataset.name,
+                    algorithm,
+                    diagnostics.original_trace_count,
+                    diagnostics.evaluated_trace_count,
+                )
+            if diagnostics.metric_runtimes:
+                runtime_str = ", ".join(
+                    f"{item.metric}={item.runtime_seconds:.2f}s" for item in diagnostics.metric_runtimes
+                )
+                logger.info("Metric runtimes for %s/%s: %s", dataset.name, algorithm, runtime_str)
+            if diagnostics.variant_sampled:
+                logger.warning(
+                    "Evaluation variants for %s/%s were sampled from %s to %s representatives to improve alignment speed.",
+                    dataset.name,
+                    algorithm,
+                    diagnostics.original_variant_count,
+                    diagnostics.evaluated_variant_count,
+                )
             stats = net_statistics(discovered.net)
 
             net_filename = f"{sanitize_name(dataset.name)}__{sanitize_name(algorithm)}.png"
@@ -121,6 +148,10 @@ def run_pipeline(data_dir: Path = DATA_DIR) -> pd.DataFrame:
                 "simplicity": evaluation.simplicity.value,
                 "simplicity_error": evaluation.simplicity.error,
                 "runtime_seconds": round(discovered.runtime_seconds, 6),
+                "evaluated_traces": diagnostics.evaluated_trace_count,
+                "trace_sampling_used": diagnostics.sampled,
+                "evaluated_variants": diagnostics.evaluated_variant_count,
+                "variant_sampling_used": diagnostics.variant_sampled,
                 **stats,
                 "net_image": str(net_path),
             }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -24,6 +26,27 @@ class EvaluationResult:
     simplicity: MetricValue
 
 
+@dataclass
+class MetricRuntime:
+    """Stores runtime diagnostics for one metric evaluation."""
+
+    metric: str
+    runtime_seconds: float
+
+
+@dataclass
+class EvaluationDiagnostics:
+    """Optional diagnostics describing how evaluation was executed."""
+
+    original_trace_count: Optional[int] = None
+    evaluated_trace_count: Optional[int] = None
+    original_variant_count: Optional[int] = None
+    evaluated_variant_count: Optional[int] = None
+    sampled: bool = False
+    variant_sampled: bool = False
+    metric_runtimes: Optional[list[MetricRuntime]] = None
+
+
 def _safe_metric(metric_name: str, fn) -> MetricValue:
     try:
         value = fn()
@@ -37,35 +60,130 @@ def _safe_metric(metric_name: str, fn) -> MetricValue:
         return MetricValue(value=None, error=f"{metric_name} failed: {exc}")
 
 
-def evaluate_model(log: object, net: object, initial_marking: object, final_marking: object) -> EvaluationResult:
+def _trace_count(log: object) -> Optional[int]:
+    try:
+        return len(log)
+    except Exception:
+        return None
+
+
+def _sample_log(log: object, max_traces: Optional[int], seed: int = 42) -> tuple[object, Optional[int], Optional[int], bool]:
+    original_count = _trace_count(log)
+    if max_traces is None or original_count is None or original_count <= max_traces:
+        return log, original_count, original_count, False
+
+    indices = sorted(random.Random(seed).sample(range(original_count), max_traces))
+    sampled_traces = [log[idx] for idx in indices]
+
+    try:
+        from pm4py.objects.log.obj import EventLog
+
+        sampled_log = EventLog(sampled_traces, attributes=getattr(log, "attributes", None))
+        return sampled_log, original_count, len(sampled_log), True
+    except Exception:
+        return sampled_traces, original_count, len(sampled_traces), True
+
+
+def _variant_key(trace: object) -> tuple[str, ...]:
+    return tuple(event.get("concept:name", "<missing>") for event in trace)
+
+
+def _count_variants(log: object) -> Optional[int]:
+    try:
+        return len({_variant_key(trace) for trace in log})
+    except Exception:
+        return None
+
+
+def _sample_variants(log: object, max_variants: Optional[int]) -> tuple[object, Optional[int], Optional[int], bool]:
+    original_variant_count = _count_variants(log)
+    if max_variants is None or original_variant_count is None or original_variant_count <= max_variants:
+        return log, original_variant_count, original_variant_count, False
+
+    chosen_keys = set()
+    sampled_traces = []
+    for trace in log:
+        key = _variant_key(trace)
+        if key in chosen_keys:
+            continue
+        chosen_keys.add(key)
+        sampled_traces.append(trace)
+        if len(chosen_keys) >= max_variants:
+            break
+
+    try:
+        from pm4py.objects.log.obj import EventLog
+
+        sampled_log = EventLog(sampled_traces, attributes=getattr(log, "attributes", None))
+        return sampled_log, original_variant_count, _count_variants(sampled_log), True
+    except Exception:
+        return sampled_traces, original_variant_count, _count_variants(sampled_traces), True
+
+
+def _timed_metric(metric_name: str, fn) -> tuple[MetricValue, MetricRuntime]:
+    start = time.perf_counter()
+    metric = _safe_metric(metric_name, fn)
+    end = time.perf_counter()
+    return metric, MetricRuntime(metric=metric_name, runtime_seconds=end - start)
+
+
+def evaluate_model(
+    log: object,
+    net: object,
+    initial_marking: object,
+    final_marking: object,
+    max_traces: Optional[int] = None,
+    max_variants: Optional[int] = None,
+) -> tuple[EvaluationResult, EvaluationDiagnostics]:
     """Evaluate discovered model with PM4Py conformance and quality metrics."""
     from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
     from pm4py.algo.evaluation.replay_fitness import algorithm as fitness_evaluator
     from pm4py.algo.evaluation.generalization import algorithm as generalization_evaluator
     from pm4py.algo.evaluation.simplicity import algorithm as simplicity_evaluator
 
-    fitness = _safe_metric(
+    eval_log, original_count, eval_count, sampled = _sample_log(log, max_traces=max_traces)
+    eval_log, original_variant_count, eval_variant_count, variant_sampled = _sample_variants(
+        eval_log, max_variants=max_variants
+    )
+
+    fitness, fitness_runtime = _timed_metric(
         "fitness",
-        lambda: fitness_evaluator.apply(log, net, initial_marking, final_marking),
+        lambda: fitness_evaluator.apply(eval_log, net, initial_marking, final_marking),
     )
-    precision = _safe_metric(
+    precision, precision_runtime = _timed_metric(
         "precision",
-        lambda: precision_evaluator.apply(log, net, initial_marking, final_marking),
+        lambda: precision_evaluator.apply(eval_log, net, initial_marking, final_marking),
     )
-    generalization = _safe_metric(
+    generalization, generalization_runtime = _timed_metric(
         "generalization",
-        lambda: generalization_evaluator.apply(log, net, initial_marking, final_marking),
+        lambda: generalization_evaluator.apply(eval_log, net, initial_marking, final_marking),
     )
-    simplicity = _safe_metric(
+    simplicity, simplicity_runtime = _timed_metric(
         "simplicity",
         lambda: simplicity_evaluator.apply(net),
     )
 
-    return EvaluationResult(
-        fitness=fitness,
-        precision=precision,
-        generalization=generalization,
-        simplicity=simplicity,
+    return (
+        EvaluationResult(
+            fitness=fitness,
+            precision=precision,
+            generalization=generalization,
+            simplicity=simplicity,
+        ),
+        EvaluationDiagnostics(
+            original_trace_count=original_count,
+            evaluated_trace_count=eval_count,
+            original_variant_count=original_variant_count,
+            evaluated_variant_count=eval_variant_count,
+            sampled=sampled,
+            variant_sampled=variant_sampled,
+            metric_runtimes=[
+                fitness_runtime,
+                precision_runtime,
+                generalization_runtime,
+                simplicity_runtime,
+            ],
+        ),
     )
 
 
